@@ -386,7 +386,7 @@ class WorkflowService:
         artifact_name: str,
         download_dir: str
     ) -> dict:
-        """下载 GitHub Actions 产物（仅下载 ZIP 文件，不解压）
+        """下载并解压 GitHub Actions 产物
 
         Args:
             repo: 仓库路径 (owner/repo)
@@ -398,8 +398,8 @@ class WorkflowService:
             dict: {
                 'success': bool,
                 'message': str,
-                'zip_path': str,
-                'zip_size': int,
+                'extracted_path': str,
+                'file_count': int,
                 'error': str
             }
         """
@@ -464,97 +464,28 @@ class WorkflowService:
             temp_zip = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
 
             try:
-                # 步骤 4a: 首次请求获取重定向 URL（需要认证）
+                # 使用 Token 认证
                 headers = {
                     'Authorization': f"Bearer {self.token}",
                     'Accept': 'application/vnd.github.v3+json'
                 }
 
-                # 禁用自动重定向，手动处理
-                response = requests.get(
-                    download_url,
-                    headers=headers,
-                    allow_redirects=False,  # 关键修改：禁用自动重定向
-                    timeout=30
-                )
+                with requests.get(download_url, headers=headers, stream=True, timeout=300) as r:
+                    r.raise_for_status()
 
-                # 检查是否为重定向响应
-                if response.status_code in (301, 302, 303, 307, 308):
-                    redirect_url = response.headers.get('Location')
-                    if not redirect_url:
-                        raise ValueError("服务器返回重定向但没有 Location 头")
-
-                    logger.info(f"检测到重定向: {response.status_code} → {redirect_url[:100]}...")
-
-                    # 步骤 4b: 从重定向 URL 下载文件（已包含认证令牌）
-                    logger.info(f"开始从重定向 URL 下载文件...")
-                    with requests.get(
-                        redirect_url,
-                        stream=True,
-                        timeout=300
-                        # 注意：不发送 Authorization 头，重定向 URL 已包含认证信息
-                    ) as download_response:
-                        download_response.raise_for_status()
-
-                        # 验证内容类型
-                        content_type = download_response.headers.get('Content-Type', '')
-                        if 'zip' not in content_type and 'application/octet-stream' not in content_type:
-                            logger.warning(f"警告：响应内容类型不是 ZIP: {content_type}")
-
-                        downloaded = 0
-                        for chunk in download_response.iter_content(chunk_size=8192):
-                            if chunk:
-                                temp_zip.write(chunk)
-                                downloaded += len(chunk)
-
-                                # 每 10MB 记录一次
-                                if downloaded % (10 * 1024 * 1024) == 0:
-                                    logger.info(f"已下载: {downloaded / 1024 / 1024:.1f} MB")
-
-                        logger.info(f"下载完成: {temp_zip.name}, 总大小: {downloaded / 1024:.1f} KB")
-
-                        # 验证下载大小
-                        if downloaded == 0:
-                            raise ValueError("下载的文件大小为 0，可能下载失败")
-
-                elif response.status_code == 200:
-                    # 某些情况下直接返回文件（无重定向）
-                    logger.info(f"直接下载（无重定向）")
                     downloaded = 0
-                    for chunk in response.iter_content(chunk_size=8192):
+                    for chunk in r.iter_content(chunk_size=8192):
                         if chunk:
                             temp_zip.write(chunk)
                             downloaded += len(chunk)
 
+                            # 每 10MB 记录一次
                             if downloaded % (10 * 1024 * 1024) == 0:
                                 logger.info(f"已下载: {downloaded / 1024 / 1024:.1f} MB")
-                else:
-                    response.raise_for_status()
 
                 temp_zip.close()
+                logger.info(f"下载完成: {temp_zip.name}")
 
-            except requests.HTTPError as e:
-                temp_zip.close()
-                Path(temp_zip.name).unlink(missing_ok=True)
-
-                # 诊断信息
-                error_details = []
-                if hasattr(e.response, 'status_code'):
-                    error_details.append(f"状态码: {e.response.status_code}")
-                if hasattr(e.response, 'headers'):
-                    content_type = e.response.headers.get('Content-Type', '')
-                    error_details.append(f"内容类型: {content_type}")
-                if hasattr(e.response, 'text'):
-                    error_text = e.response.text[:200]
-                    error_details.append(f"响应: {error_text}")
-
-                error_msg = f"HTTP 错误: {e} | {' | '.join(error_details)}"
-                logger.error(error_msg)
-
-                return {
-                    'success': False,
-                    'error': error_msg
-                }
             except Exception as e:
                 temp_zip.close()
                 Path(temp_zip.name).unlink(missing_ok=True)
@@ -563,37 +494,26 @@ class WorkflowService:
                     'error': f"下载失败: {e}"
                 }
 
-            # 5. 保存 ZIP 文件到目标位置
-            zip_filename = f"{artifact_name}.zip"
-            zip_destination = download_path / zip_filename
-
+            # 5. 解压文件
+            extract_path = download_path / artifact_name
             try:
-                # 如果目标文件已存在，先删除
-                if zip_destination.exists():
-                    logger.warning(f"目标文件已存在，将覆盖: {zip_destination}")
-                    zip_destination.unlink()
-
-                # 移动临时文件到目标位置
-                import shutil
-                shutil.move(temp_zip.name, str(zip_destination))
-
-                # 获取文件大小
-                zip_size = zip_destination.stat().st_size
-                logger.info(f"ZIP 文件保存成功: {zip_destination} ({zip_size / 1024:.1f} KB)")
-
+                file_count = self._extract_zip(temp_zip.name, extract_path)
+                logger.info(f"解压成功: {extract_path}, 共 {file_count} 个文件")
             except Exception as e:
-                # 清理临时文件
                 Path(temp_zip.name).unlink(missing_ok=True)
                 return {
                     'success': False,
-                    'error': f"保存 ZIP 文件失败: {e}"
+                    'error': f"解压失败: {e}"
                 }
+
+            # 6. 删除 ZIP 文件
+            Path(temp_zip.name).unlink(missing_ok=True)
 
             return {
                 'success': True,
-                'message': f'产物 "{artifact_name}" 下载成功（ZIP 文件）',
-                'zip_path': str(zip_destination),
-                'zip_size': zip_size
+                'message': f'产物 "{artifact_name}" 下载并解压成功',
+                'extracted_path': str(extract_path),
+                'file_count': file_count
             }
 
         except Exception as e:
