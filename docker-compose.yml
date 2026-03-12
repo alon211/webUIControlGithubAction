@@ -11,4 +11,5 @@ services:
     environment:
       - FLASK_ENV=production
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - DISPLAY=host.docker.internal:0  # Windows/macOS Docker Desktop GUI 支持
     restart: unless-stopped

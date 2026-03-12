@@ -27,7 +27,15 @@
       "Bash(curl -s \"https://api.github.com/repos/alon211/expense-reimbursement-email-automation\")",
       "Bash(netstat -ano)",
       "mcp__chrome-devtools__fill",
-      "Read(//d//**)"
+      "Read(//d//**)",
+      "Bash(start http://127.0.0.1:5000/config)",
+      "Bash(curl -X POST http://127.0.0.1:5000/config/api/select_folder -H \"Content-Type: application/json\" -d \"{\"\"current_path\"\": \"\".\"\"}\" --max-time 5)",
+      "Bash(curl http://127.0.0.1:5000/config/api)",
+      "Bash(curl -X POST http://127.0.0.1:5000/config/api/select_folder -H \"Content-Type: application/json\" -d \"{\"\"current_path\"\": \"\".\"\"}\" --max-time 35)",
+      "Bash(wmic process:*)",
+      "Bash(powershell -Command \"Get-Process python | ForEach-Object { Stop-Process -Id $_d -Force }\")",
+      "Read(//c/dockerVolumn/webUIControlGithubAction/**)",
+      "Bash(xargs -I {} cmd //c \"taskkill /F /PID {}\")"
     ],
     "additionalDirectories": [
       "c:\\dockerVolumn\\webUIControlGithubAction\\app\\services"

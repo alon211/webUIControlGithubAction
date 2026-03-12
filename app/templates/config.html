@@ -251,69 +251,36 @@ function applyPresetDir() {
 
 async function selectFolderAndSetPath() {
     try {
-        // 使用现代的 File System Access API
-        if ('showDirectoryPicker' in window) {
-            // 智能选择起始目录：根据当前配置路径推断
-            const currentPath = $('#download_dir').val().toLowerCase();
-            let startIn = 'downloads'; // 默认值
+        const currentPath = $('#download_dir').val().trim() || '.';
 
-            if (currentPath.includes('document')) {
-                startIn = 'documents';
-            } else if (currentPath.includes('picture')) {
-                startIn = 'pictures';
-            } else if (currentPath.includes('music')) {
-                startIn = 'music';
-            } else if (currentPath.includes('video')) {
-                startIn = 'videos';
-            } else if (currentPath.includes('desktop')) {
-                startIn = 'desktop';
-            } else if (currentPath.includes('download')) {
-                startIn = 'downloads';
-            }
+        // 显示加载提示
+        showAlert('正在打开文件夹选择对话框...', 'info');
 
-            const dirHandle = await window.showDirectoryPicker({
-                mode: 'read',
-                startIn: startIn
-            });
+        // 调用后端 API 弹出系统对话框
+        const response = await fetch('/config/api/select_folder', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ current_path: currentPath })
+        });
 
-            // 获取文件夹名称
-            const folderName = dirHandle.name;
+        const data = await response.json();
 
-            // 设置路径（使用 data/ 前缀）
-            const finalPath = `data/${folderName}`;
-            $('#download_dir').val(finalPath);
-
-            showAlert(`已选择文件夹: ${folderName}，路径设置为: ${finalPath}`, 'success');
-
+        if (data.success) {
+            // 成功获取完整路径
+            $('#download_dir').val(data.path);
+            $('#download_dir_preset').val(''); // 清除预设选择
+            showAlert(`已选择路径: ${data.path}`, 'success');
         } else {
-            // 降级方案：使用旧的 webkitdirectory 方法
-            showAlert('浏览器不支持文件夹选择API，使用传统方式', 'warning');
-
-            const input = $('<input type="file" webkitdirectory directory style="display:none">');
-            $('body').append(input);
-
-            input.on('change', function() {
-                if (this.files && this.files.length > 0) {
-                    const firstFilePath = this.files[0].webkitRelativePath;
-                    const folderPath = firstFilePath.substring(0, firstFilePath.indexOf('/'));
-                    const finalPath = `data/${folderPath}`;
-                    $('#download_dir').val(finalPath);
-                    showAlert(`已选择文件夹: ${folderPath}，路径设置为: ${finalPath}`, 'success');
-                }
-                input.remove();
-            });
-
-            input.on('cancel', function() {
-                input.remove();
-            });
-
-            input.click();
+            // 失败（用户取消或错误）
+            if (data.error && !data.error.includes('未选择文件夹')) {
+                showAlert(`选择失败: ${data.error}`, 'danger');
+            } else {
+                // 用户取消，不显示错误
+                $('.alert').alert('close');
+            }
         }
     } catch (err) {
-        // 用户取消选择
-        if (err.name !== 'AbortError') {
-            showAlert(`选择文件夹失败: ${err.message}`, 'danger');
-        }
+        showAlert(`请求失败: ${err.message}`, 'danger');
     }
 }
 

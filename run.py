@@ -39,4 +39,5 @@ def init_db():
 
 if __name__ == '__main__':
     # 启动开发服务器
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # 注意：禁用 debug 模式避免多进程问题，测试时可启用
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)

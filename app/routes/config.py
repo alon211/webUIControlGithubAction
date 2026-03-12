@@ -2,6 +2,9 @@
 配置管理路由
 """
 import logging
+import threading
+import tkinter as tk
+from tkinter import filedialog
 from flask import Blueprint, render_template, request, jsonify
 from app.services.config_service import ConfigService
 
@@ -129,3 +132,71 @@ def api_test_token():
     except Exception as e:
         logger.error(f"测试 Token 失败: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@config_bp.route('/api/select_folder', methods=['POST'])
+def api_select_folder():
+    """弹出系统原生文件夹选择对话框（Python tkinter）
+
+    Returns:
+        {
+            "success": true,
+            "path": "D:/Downloads/Artifacts"  # 完整路径
+        }
+    """
+    try:
+        data = request.get_json() or {}
+        current_path = data.get('current_path', '.')
+
+        # 在独立线程中运行 GUI（避免阻塞 Flask 主线程）
+        result = {'path': None, 'error': None}
+
+        def show_dialog():
+            try:
+                root = tk.Tk()
+                root.withdraw()  # 隐藏主窗口，只显示对话框
+
+                # 弹出文件夹选择对话框
+                folder_path = filedialog.askdirectory(
+                    title="选择下载目录",
+                    initialdir=current_path
+                )
+
+                root.destroy()
+
+                if folder_path:  # 用户选择了路径（未取消）
+                    result['path'] = folder_path
+
+            except Exception as e:
+                result['error'] = str(e)
+
+        # 在独立线程中运行
+        thread = threading.Thread(target=show_dialog)
+        thread.start()
+        thread.join(timeout=30)  # 最多等待30秒
+
+        if result.get('path'):
+            logger.info(f"用户选择了文件夹: {result['path']}")
+            return jsonify({
+                'success': True,
+                'path': result['path']
+            })
+        elif result.get('error'):
+            logger.error(f"文件夹选择失败: {result['error']}")
+            return jsonify({
+                'success': False,
+                'error': result['error']
+            })
+        else:
+            # 用户取消选择
+            return jsonify({
+                'success': False,
+                'error': '未选择文件夹或操作超时'
+            })
+
+    except Exception as e:
+        logger.error(f"选择文件夹 API 异常: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
