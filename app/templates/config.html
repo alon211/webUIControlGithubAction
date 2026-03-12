@@ -1,0 +1,750 @@
+{% extends "base.html" %}
+
+{% block title %}配置管理 - GitHub Actions Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8 offset-md-2">
+        <h2>系统配置</h2>
+        <p class="text-muted">配置 GitHub Token 和其他系统设置</p>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">配置表单</h5>
+            </div>
+            <div class="card-body">
+                <form id="configForm">
+                    <div class="mb-3">
+                        <label for="github_token" class="form-label">GitHub Token</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="github_token" name="github_token"
+                                   placeholder="ghp_xxxxxxxxxxxx" required>
+                            <button class="btn btn-outline-secondary" type="button" onclick="testToken()" id="testTokenBtn">
+                                <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                                测试
+                            </button>
+                        </div>
+                        <div class="form-text">
+                            需要 repo 权限的 Personal Access Token。
+                            <a href="https://github.com/settings/tokens" target="_blank">生成 Token →</a>
+                        </div>
+                        <div id="tokenTestResult" class="mt-2"></div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="github_repo" class="form-label">默认仓库</label>
+                        <input type="text" class="form-control" id="github_repo" name="github_repo"
+                               placeholder="owner/repo" required>
+                        <div class="form-text">例如：octocat/Hello-World</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="download_dir" class="form-label">
+                            <i class="bi bi-download"></i> 默认下载目录（保存位置）
+                        </label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="download_dir" name="download_dir"
+                                   placeholder="data/downloads" value="data/downloads">
+                            <button class="btn btn-outline-primary" type="button" onclick="selectDownloadDir()">
+                                <i class="bi bi-folder"></i> 选择文件夹
+                            </button>
+                        </div>
+                        <div class="form-text">
+                            <i class="bi bi-info-circle"></i>
+                            工作流产物的保存路径。点击「选择文件夹」后，在弹出的对话框中选择任意文件即可（系统会自动提取父目录）
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="saveBtn">
+                        <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                        保存配置
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 快速触发设置 -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">⚡ 快速触发设置</h5>
+                <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addQuickTriggerModal">
+                    <i class="bi bi-plus-lg"></i> 添加快速触发
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="quickTriggersList">
+                    <p class="text-muted text-center py-3">加载中...</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">当前配置</h5>
+                <button class="btn btn-sm btn-outline-secondary" onclick="location.reload()">
+                    刷新
+                </button>
+            </div>
+            <div class="card-body">
+                {% if configs %}
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>配置项</th>
+                                <th>值</th>
+                                <th>说明</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for config in configs %}
+                            <tr>
+                                <td><code>{{ config.key }}</code></td>
+                                <td>
+                                    {% if config.key == 'github_token' %}
+                                    ****** (已隐藏)
+                                    {% else %}
+                                    {{ config.value }}
+                                    {% endif %}
+                                </td>
+                                <td>{{ config.description or '-' }}</td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            onclick="deleteConfig('{{ config.key }}')">
+                                        删除
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted">暂无配置</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    // 加载现有配置
+    loadConfig();
+
+    // 表单提交
+    $('#configForm').on('submit', function(e) {
+        e.preventDefault();
+        saveConfig();
+    });
+});
+
+function loadConfig() {
+    $.get('/config/api')
+        .done(function(data) {
+            if (data.github_token) {
+                $('#github_token').val(data.github_token);
+            }
+            if (data.github_repo) {
+                $('#github_repo').val(data.github_repo);
+            }
+            if (data.download_dir) {
+                $('#download_dir').val(data.download_dir);
+            }
+        })
+        .fail(function() {
+            showAlert('加载配置失败', 'danger');
+        });
+}
+
+function testToken() {
+    const token = $('#github_token').val().trim();
+
+    if (!token) {
+        showTokenResult('请先输入 GitHub Token', 'warning');
+        return;
+    }
+
+    const btn = $('#testTokenBtn');
+    btn.prop('disabled', true);
+    btn.find('.spinner-border').removeClass('d-none');
+
+    $.ajax({
+        url: '/config/api/test_token',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ token: token }),
+        success: function(data) {
+            if (data.success) {
+                showTokenResult(`✓ Token 有效! 用户: ${data.username}${data.name ? ' (' + data.name + ')' : ''}`, 'success');
+            } else {
+                showTokenResult(`✗ Token 无效: ${data.error}`, 'danger');
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || 'Token 测试失败';
+            showTokenResult(`✗ ${msg}`, 'danger');
+        },
+        complete: function() {
+            btn.prop('disabled', false);
+            btn.find('.spinner-border').addClass('d-none');
+        }
+    });
+}
+
+function showTokenResult(message, type) {
+    const alertClass = type === 'success' ? 'alert-success' :
+                       type === 'danger' ? 'alert-danger' :
+                       type === 'warning' ? 'alert-warning' : 'alert-info';
+    $('#tokenTestResult').html(`<div class="alert ${alertClass} py-2 px-3">${message}</div>`);
+    setTimeout(() => {
+        $('#tokenTestResult').fadeOut(500, function() {
+            $(this).empty().show();
+        });
+    }, 5000);
+}
+
+function selectDownloadDir() {
+    // 显示提示信息
+    showAlert('请在弹出的对话框中选择目标文件夹内的任意一个文件（系统会自动获取该文件的父目录作为下载路径）', 'info');
+
+    // 延迟一小段时间让用户看到提示
+    setTimeout(() => {
+        const input = $('<input type="file" webkitdirectory directory style="display:none">');
+        $('body').append(input);
+
+        input.on('change', function() {
+            if (this.files && this.files.length > 0) {
+                const filePath = this.files[0].webkitRelativePath;
+                const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+                $('#download_dir').val(dirPath);
+
+                // 显示成功提示
+                const dirName = dirPath.split('/').pop() || dirPath;
+                showAlert(`已选择下载目录: ${dirName}`, 'success');
+            }
+            input.remove();
+        });
+
+        // 用户取消选择时清理
+        input.on('cancel', function() {
+            input.remove();
+        });
+
+        input.click();
+    }, 500);
+}
+
+function saveConfig() {
+    const config = {
+        github_token: $('#github_token').val(),
+        github_repo: $('#github_repo').val(),
+        download_dir: $('#download_dir').val()
+    };
+
+    const btn = $('#saveBtn');
+    btn.prop('disabled', true);
+    btn.find('.spinner-border').removeClass('d-none');
+
+    $.ajax({
+        url: '/config/api',
+        method: 'PUT',
+        contentType: 'application/json',
+        data: JSON.stringify(config),
+        success: function() {
+            showAlert('配置保存成功', 'success');
+            setTimeout(() => location.reload(), 1000);
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '配置保存失败';
+            showAlert(msg, 'danger');
+        },
+        complete: function() {
+            btn.prop('disabled', false);
+            btn.find('.spinner-border').addClass('d-none');
+        }
+    });
+}
+
+function deleteConfig(key) {
+    if (!confirm(`确定要删除配置 "${key}" 吗？`)) {
+        return;
+    }
+
+    $.ajax({
+        url: `/config/api/${key}`,
+        method: 'DELETE',
+        success: function() {
+            showAlert('配置删除成功', 'success');
+            setTimeout(() => location.reload(), 500);
+        },
+        error: function() {
+            showAlert('配置删除失败', 'danger');
+        }
+    });
+}
+
+function showAlert(message, type) {
+    const alert = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    `;
+    $('#alert-container').html(alert);
+    setTimeout(() => {
+        $('.alert').alert('close');
+    }, 3000);
+}
+
+// ==================== 快速触发管理 ====================
+
+// 页面加载时获取快速触发列表
+$(document).ready(function() {
+    loadQuickTriggers();
+});
+
+function loadQuickTriggers() {
+    $.ajax({
+        url: '/workflows/api/quick-triggers/list',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({}),
+        success: function(data) {
+            if (data.success) {
+                displayQuickTriggers(data.triggers);
+            } else {
+                $('#quickTriggersList').html(`<p class="text-danger text-center py-3">加载失败: ${data.error || '未知错误'}</p>`);
+            }
+        },
+        error: function() {
+            $('#quickTriggersList').html('<p class="text-danger text-center py-3">加载失败，请稍后重试</p>');
+        }
+    });
+}
+
+function displayQuickTriggers(triggers) {
+    if (!triggers || triggers.length === 0) {
+        $('#quickTriggersList').html('<p class="text-muted text-center py-3">暂无快速触发项，点击上方"添加快速触发"按钮添加</p>');
+        return;
+    }
+
+    let html = '<div class="table-responsive"><table class="table table-striped">';
+    html += '<thead><tr><th>名称</th><th>仓库</th><th>工作流</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+
+    triggers.forEach(trigger => {
+        const statusBadge = getStatusBadge(trigger.last_status);
+        const isRunning = (trigger.last_status === 'running' || trigger.last_status === 'in_progress' || trigger.last_status === 'queued');
+        const runButtonDisabled = isRunning ? 'disabled' : '';
+        const runButtonClass = isRunning ? 'btn-secondary' : 'btn-outline-success';
+        const runButtonIcon = isRunning ? '<span class="spinner-border spinner-border-sm"></span>' : '<i class="bi bi-play-fill"></i>';
+
+        html += `
+            <tr>
+                <td><strong>${trigger.name}</strong></td>
+                <td><code>${trigger.repo}</code></td>
+                <td>${trigger.workflow_name}</td>
+                <td>${statusBadge}</td>
+                <td>
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn ${runButtonClass}" ${runButtonDisabled} onclick="triggerQuickTrigger('${trigger.id}', '${trigger.name}', this)" title="运行">
+                            ${runButtonIcon}
+                        </button>
+                        <button class="btn btn-outline-primary" onclick="editQuickTrigger('${trigger.id}')" title="编辑">
+                            <i class="bi bi-pencil"></i>
+                        </button>
+                        <button class="btn btn-outline-danger" onclick="deleteQuickTrigger('${trigger.id}', '${trigger.name}')" title="删除">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    });
+
+    html += '</tbody></table></div>';
+    $('#quickTriggersList').html(html);
+
+    // 如果有正在运行的工作流，启动状态监控
+    const hasRunning = triggers.some(t => t.last_status === 'running' || t.last_status === 'in_progress' || t.last_status === 'queued');
+    if (hasRunning) {
+        startConfigStatusMonitoring();
+    }
+}
+
+function getStatusBadge(status) {
+    if (!status) {
+        return '<span class="badge bg-secondary">未运行</span>';
+    }
+    if (status === 'success') {
+        return '<span class="badge bg-success">✓ 成功</span>';
+    } else if (status === 'failure') {
+        return '<span class="badge bg-danger">✗ 失败</span>';
+    } else if (status === 'running' || status === 'in_progress' || status === 'queued') {
+        return '<span class="badge bg-primary">⟳ 进行中</span>';
+    } else {
+        return `<span class="badge bg-secondary">${status}</span>`;
+    }
+}
+
+function triggerQuickTrigger(id, name, buttonElement) {
+    if (!confirm(`确定要运行快速触发 "${name}" 吗？`)) {
+        return;
+    }
+
+    // 立即禁用按钮
+    if (buttonElement) {
+        $(buttonElement).prop('disabled', true).removeClass('btn-outline-success').addClass('btn-secondary');
+        $(buttonElement).html('<span class="spinner-border spinner-border-sm"></span>');
+    }
+
+    $.ajax({
+        url: '/workflows/api/quick-triggers/trigger',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ id: id }),
+        success: function(data) {
+            if (data.success) {
+                showAlert(`快速触发 "${name}" 已在 ${data.branch || 'main'} 分支触发！`, 'success');
+                // 立即刷新列表并启动监控
+                loadQuickTriggers();
+            } else {
+                showAlert(`触发失败: ${data.error}`, 'danger');
+                // 失败后恢复按钮
+                if (buttonElement) {
+                    $(buttonElement).prop('disabled', false).removeClass('btn-secondary').addClass('btn-outline-success');
+                    $(buttonElement).html('<i class="bi bi-play-fill"></i>');
+                }
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '触发失败';
+            showAlert(msg, 'danger');
+            // 失败后恢复按钮
+            if (buttonElement) {
+                $(buttonElement).prop('disabled', false).removeClass('btn-secondary').addClass('btn-outline-success');
+                $(buttonElement).html('<i class="bi bi-play-fill"></i>');
+            }
+        }
+    });
+}
+
+let configStatusCheckInterval = null;
+
+function startConfigStatusMonitoring() {
+    // 清除已有的监控
+    if (configStatusCheckInterval) {
+        clearInterval(configStatusCheckInterval);
+    }
+
+    // 每 5 秒检查一次状态
+    configStatusCheckInterval = setInterval(() => {
+        $.ajax({
+            url: '/workflows/api/quick-triggers/list',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({}),
+            success: function(data) {
+                if (data.success) {
+                    const hasRunning = data.triggers.some(t =>
+                        t.last_status === 'running' ||
+                        t.last_status === 'in_progress' ||
+                        t.last_status === 'queued'
+                    );
+
+                    // 更新显示
+                    displayQuickTriggers(data.triggers);
+
+                    // 如果没有正在运行的工作流，停止监控
+                    if (!hasRunning) {
+                        stopConfigStatusMonitoring();
+                    }
+                }
+            },
+            error: function() {
+                // 监控失败，停止监控
+                stopConfigStatusMonitoring();
+            }
+        });
+    }, 5000);
+}
+
+function stopConfigStatusMonitoring() {
+    if (configStatusCheckInterval) {
+        clearInterval(configStatusCheckInterval);
+        configStatusCheckInterval = null;
+    }
+}
+
+function deleteQuickTrigger(id, name) {
+    if (!confirm(`确定要删除快速触发 "${name}" 吗？`)) {
+        return;
+    }
+
+    $.ajax({
+        url: '/workflows/api/quick-triggers/delete',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ id: id }),
+        success: function(data) {
+            if (data.success) {
+                showAlert('快速触发已删除', 'success');
+                loadQuickTriggers();
+            } else {
+                showAlert(`删除失败: ${data.error}`, 'danger');
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '删除失败';
+            showAlert(msg, 'danger');
+        }
+    });
+}
+
+function editQuickTrigger(id) {
+    // TODO: 实现编辑功能（可以打开模态框并填充现有数据）
+    showAlert('编辑功能即将推出', 'info');
+}
+</script>
+
+<!-- 添加快速触发模态框 -->
+<div class="modal fade" id="addQuickTriggerModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">添加快速触发</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <ul class="nav nav-tabs" id="addTriggerTabs" role="tablist">
+                    <li class="nav-item">
+                        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-workflow-library" type="button">
+                            从工作流库选择
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-manual" type="button">
+                            手动输入
+                        </button>
+                    </li>
+                </ul>
+
+                <div class="tab-content mt-3" id="addTriggerTabContent">
+                    <!-- 从工作流库选择 -->
+                    <div class="tab-pane fade show active" id="tab-workflow-library">
+                        <div class="mb-3">
+                            <label class="form-label">仓库路径</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="qt_repo" placeholder="owner/repo">
+                                <button class="btn btn-outline-secondary" type="button" onclick="loadWorkflowsForTrigger()" id="loadWorkflowsBtn">
+                                    <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                                    加载工作流
+                                </button>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">选择工作流</label>
+                            <div id="workflowListForTrigger" class="list-group" style="max-height: 200px; overflow-y: auto;">
+                                <p class="text-muted text-center py-3">请先输入仓库路径并加载工作流</p>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">显示名称</label>
+                            <input type="text" class="form-control" id="qt_name" placeholder="例如：生产部署">
+                        </div>
+                    </div>
+
+                    <!-- 手动输入 -->
+                    <div class="tab-pane fade" id="tab-manual">
+                        <div class="mb-3">
+                            <label class="form-label">显示名称</label>
+                            <input type="text" class="form-control" id="qt_manual_name" placeholder="例如：生产部署">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">仓库路径</label>
+                            <input type="text" class="form-control" id="qt_manual_repo" placeholder="owner/repo">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">工作流 ID</label>
+                            <input type="number" class="form-control" id="qt_manual_workflow_id" placeholder="123456">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">工作流名称</label>
+                            <input type="text" class="form-control" id="qt_manual_workflow_name" placeholder="deploy.yml">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">分支</label>
+                            <input type="text" class="form-control" id="qt_manual_branch" placeholder="main" value="main">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="saveQuickTrigger()" id="saveQuickTriggerBtn">
+                    <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                    保存
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let selectedWorkflow = null;
+
+function loadWorkflowsForTrigger() {
+    const repo = $('#qt_repo').val().trim();
+
+    if (!repo) {
+        showAlert('请输入仓库路径', 'warning');
+        return;
+    }
+
+    const btn = $('#loadWorkflowsBtn');
+    btn.prop('disabled', true);
+    btn.find('.spinner-border').removeClass('d-none');
+
+    $.ajax({
+        url: '/workflows/api/list',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ repo: repo }),
+        success: function(data) {
+            if (data.success && data.workflows && data.workflows.length > 0) {
+                displayWorkflowList(data.workflows);
+            } else {
+                $('#workflowListForTrigger').html('<p class="text-muted text-center py-3">此仓库没有工作流</p>');
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '加载工作流失败';
+            $('#workflowListForTrigger').html(`<p class="text-danger text-center py-3">${msg}</p>`);
+        },
+        complete: function() {
+            btn.prop('disabled', false);
+            btn.find('.spinner-border').addClass('d-none');
+        }
+    });
+}
+
+function displayWorkflowList(workflows) {
+    let html = '';
+    workflows.forEach(workflow => {
+        html += `
+            <a href="#" class="list-group-item list-group-item-action" onclick="selectWorkflow(${workflow.id}, '${workflow.name}', '${workflow.path}')">
+                <div class="d-flex w-100 justify-content-between">
+                    <h6 class="mb-1">${workflow.name}</h6>
+                    ${workflow.state === 'active' ? '<span class="badge bg-success">活跃</span>' : '<span class="badge bg-secondary">未激活</span>'}
+                </div>
+                <small class="text-muted">${workflow.path}</small>
+            </a>
+        `;
+    });
+    $('#workflowListForTrigger').html(html);
+}
+
+function selectWorkflow(id, name, path) {
+    selectedWorkflow = { id, name, path };
+    // 高亮选中项
+    $('#workflowListForTrigger a').removeClass('active').filter(function() {
+        return $(this).find('h6').text() === name;
+    }).addClass('active');
+    // 自动填充显示名称
+    $('#qt_name').val(name.replace('.yml', '').replace('.yaml', ''));
+}
+
+function saveQuickTrigger() {
+    // 判断当前是哪个标签页
+    const isManual = !$('#tab-manual').hasClass('active') === false;
+
+    let data = {};
+
+    if (isManual) {
+        // 手动输入
+        data = {
+            name: $('#qt_manual_name').val().trim(),
+            repo: $('#qt_manual_repo').val().trim(),
+            workflow_id: $('#qt_manual_workflow_id').val(),
+            workflow_name: $('#qt_manual_workflow_name').val().trim(),
+            branch: $('#qt_manual_branch').val().trim() || 'main'
+        };
+
+        if (!data.name || !data.repo || !data.workflow_id || !data.workflow_name) {
+            showAlert('请填写所有必填字段', 'warning');
+            return;
+        }
+    } else {
+        // 从工作流库选择
+        if (!selectedWorkflow) {
+            showAlert('请先选择一个工作流', 'warning');
+            return;
+        }
+
+        const repo = $('#qt_repo').val().trim();
+        const name = $('#qt_name').val().trim();
+
+        if (!repo || !name) {
+            showAlert('请填写仓库路径和显示名称', 'warning');
+            return;
+        }
+
+        data = {
+            name: name,
+            repo: repo,
+            workflow_id: selectedWorkflow.id,
+            workflow_name: selectedWorkflow.name,
+            branch: 'main' // 默认分支
+        };
+    }
+
+    const btn = $('#saveQuickTriggerBtn');
+    btn.prop('disabled', true);
+    btn.find('.spinner-border').removeClass('d-none');
+
+    $.ajax({
+        url: '/workflows/api/quick-triggers/add',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(data),
+        success: function(result) {
+            if (result.success) {
+                showAlert('快速触发已添加', 'success');
+                // 关闭模态框
+                $('#addQuickTriggerModal').modal('hide');
+                // 重新加载列表
+                loadQuickTriggers();
+                // 重置表单
+                resetAddTriggerForm();
+            } else {
+                showAlert(`添加失败: ${result.error}`, 'danger');
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '添加失败';
+            showAlert(msg, 'danger');
+        },
+        complete: function() {
+            btn.prop('disabled', false);
+            btn.find('.spinner-border').addClass('d-none');
+        }
+    });
+}
+
+function resetAddTriggerForm() {
+    $('#qt_repo').val('');
+    $('#qt_name').val('');
+    $('#workflowListForTrigger').html('<p class="text-muted text-center py-3">请先输入仓库路径并加载工作流</p>');
+    selectedWorkflow = null;
+
+    $('#qt_manual_name').val('');
+    $('#qt_manual_repo').val('');
+    $('#qt_manual_workflow_id').val('');
+    $('#qt_manual_workflow_name').val('');
+    $('#qt_manual_branch').val('main');
+}
+</script>
+{% endblock %}

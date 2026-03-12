@@ -1,0 +1,421 @@
+{% extends "base.html" %}
+
+{% block title %}工作流管理 - GitHub Actions Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-10 offset-md-1">
+        <h2>GitHub Actions 工作流管理</h2>
+        <p class="text-muted">查看和触发 GitHub Actions 工作流</p>
+
+        <!-- 仓库选择 -->
+        <div class="card mb-3">
+            <div class="card-body">
+                <form id="workflowForm">
+                    <div class="row align-items-end">
+                        <div class="col-md-8">
+                            <label for="repo_path" class="form-label">仓库路径</label>
+                            <input type="text" class="form-control" id="repo_path" name="repo_path"
+                                   placeholder="owner/repo" value="{{ default_repo or '' }}" required>
+                            <div class="form-text">例如：octocat/Hello-World</div>
+                        </div>
+                        <div class="col-md-4">
+                            <button type="button" class="btn btn-primary w-100" onclick="listWorkflows()" id="listBtn">
+                                <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                                加载工作流
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 工作流列表 -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">工作流列表</h5>
+                <span id="workflowCount" class="badge bg-secondary"></span>
+            </div>
+            <div class="card-body">
+                <div id="workflowList">
+                    <p class="text-muted text-center py-5">请先输入仓库路径并点击"加载工作流"</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentRepo = '';
+
+$(document).ready(function() {
+    // 回车键触发加载
+    $('#repo_path').on('keypress', function(e) {
+        if (e.which === 13) {
+            e.preventDefault();
+            listWorkflows();
+        }
+    });
+});
+
+function listWorkflows() {
+    const repo = $('#repo_path').val().trim();
+
+    if (!repo) {
+        showAlert('请输入仓库路径', 'warning');
+        return;
+    }
+
+    currentRepo = repo;
+
+    const btn = $('#listBtn');
+    btn.prop('disabled', true);
+    btn.find('.spinner-border').removeClass('d-none');
+
+    $.ajax({
+        url: '/workflows/api/list',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ repo: repo }),
+        success: function(data) {
+            if (data.success) {
+                displayWorkflows(data.workflows);
+            } else {
+                showAlert(`加载工作流失败: ${data.error}`, 'danger');
+                $('#workflowList').html(`<p class="text-danger text-center py-5">${data.error}</p>`);
+                $('#workflowCount').text('');
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '加载工作流失败';
+            showAlert(msg, 'danger');
+        },
+        complete: function() {
+            btn.prop('disabled', false);
+            btn.find('.spinner-border').addClass('d-none');
+        }
+    });
+}
+
+function displayWorkflows(workflows) {
+    if (!workflows || workflows.length === 0) {
+        $('#workflowList').html('<p class="text-muted text-center py-5">此仓库没有工作流</p>');
+        $('#workflowCount').text('0 个');
+        return;
+    }
+
+    let html = '<div class="list-group">';
+
+    workflows.forEach(workflow => {
+        const statusBadge = workflow.state === 'active'
+            ? '<span class="badge bg-success">活跃</span>'
+            : '<span class="badge bg-secondary">未激活</span>';
+
+        html += `
+            <div class="list-group-item list-group-item-action">
+                <div class="d-flex w-100 justify-content-between align-items-center">
+                    <div>
+                        <h6 class="mb-1">
+                            <i class="bi bi-gear-fill"></i>
+                            ${workflow.name}
+                        </h6>
+                        <p class="mb-1 text-muted"><small>${workflow.path}</small></p>
+                        <small class="text-muted">创建于: ${formatDate(workflow.created_at)}</small>
+                    </div>
+                    <div class="d-flex flex-column align-items-end gap-2">
+                        ${statusBadge}
+                        <div class="btn-group">
+                            <button class="btn btn-sm btn-outline-primary" onclick="viewRuns(${workflow.id}, '${workflow.name}')">
+                                查看执行
+                            </button>
+                            <button class="btn btn-sm btn-success" onclick="triggerWorkflow(${workflow.id}, '${workflow.name}', false)">
+                                <i class="bi bi-play-fill"></i> 运行
+                            </button>
+                            <button class="btn btn-sm btn-primary" onclick="triggerWorkflow(${workflow.id}, '${workflow.name}', true)" title="运行工作流并自动下载产物">
+                                <i class="bi bi-play-fill"></i> 运行并下载
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    html += '</div>';
+    $('#workflowList').html(html);
+    $('#workflowCount').text(`${workflows.length} 个`);
+}
+
+function viewRuns(workflowId, workflowName) {
+    window.location.href = `/workflows/runs?repo=${encodeURIComponent(currentRepo)}&workflow_id=${workflowId}&workflow_name=${encodeURIComponent(workflowName)}`;
+}
+
+function triggerWorkflow(workflowId, workflowName, autoDownload = false) {
+    const actionText = autoDownload ? '运行并下载' : '运行';
+    if (!confirm(`确定要${actionText}工作流 "${workflowName}" 吗？`)) {
+        return;
+    }
+
+    // 显示加载提示
+    if (autoDownload) {
+        showAlert('正在触发工作流，请稍候...', 'info');
+    }
+
+    // 先获取默认分支
+    $.ajax({
+        url: '/workflows/api/default_branch',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ repo: currentRepo }),
+        success: function(branchData) {
+            const branch = branchData.success ? branchData.branch : 'main';
+
+            // 触发工作流
+            $.ajax({
+                url: '/workflows/api/trigger',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({
+                    repo: currentRepo,
+                    workflow_id: workflowId,
+                    branch: branch
+                }),
+                success: function(data) {
+                    if (data.success) {
+                        showAlert(`工作流 "${workflowName}" 已在 ${branch} 分支触发！`, 'success');
+
+                        // 如果需要自动下载，开始轮询
+                        if (autoDownload) {
+                            setTimeout(() => {
+                                pollAndDownloadArtifacts(workflowId, workflowName);
+                            }, 3000); // 等待3秒后开始轮询
+                        }
+                    } else {
+                        showAlert(`触发工作流失败: ${data.error}`, 'danger');
+                    }
+                },
+                error: function(xhr) {
+                    const msg = xhr.responseJSON?.error || '触发工作流失败';
+                    showAlert(msg, 'danger');
+                }
+            });
+        },
+        error: function() {
+            // 即使获取默认分支失败，也尝试使用 main 分支触发
+            $.ajax({
+                url: '/workflows/api/trigger',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({
+                    repo: currentRepo,
+                    workflow_id: workflowId,
+                    branch: 'main'
+                }),
+                success: function(data) {
+                    if (data.success) {
+                        showAlert(`工作流 "${workflowName}" 已触发！`, 'success');
+
+                        // 如果需要自动下载，开始轮询
+                        if (autoDownload) {
+                            setTimeout(() => {
+                                pollAndDownloadArtifacts(workflowId, workflowName);
+                            }, 3000);
+                        }
+                    } else {
+                        showAlert(`触发工作流失败: ${data.error}`, 'danger');
+                    }
+                },
+                error: function(xhr) {
+                    const msg = xhr.responseJSON?.error || '触发工作流失败';
+                    showAlert(msg, 'danger');
+                }
+            });
+        }
+    });
+}
+
+// 轮询工作流状态并自动下载产物
+function pollAndDownloadArtifacts(workflowId, workflowName) {
+    let pollCount = 0;
+    const maxPolls = 60; // 最多轮询60次（5分钟）
+    const pollInterval = 5000; // 每5秒轮询一次
+
+    showAlert(`等待工作流 "${workflowName}" 完成...`, 'info');
+
+    const pollTimer = setInterval(() => {
+        pollCount++;
+
+        if (pollCount > maxPolls) {
+            clearInterval(pollTimer);
+            showAlert(`工作流 "${workflowName}" 执行超时，请手动检查`, 'warning');
+            return;
+        }
+
+        // 获取最新的执行记录
+        $.ajax({
+            url: '/workflows/api/runs',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                repo: currentRepo,
+                workflow_id: workflowId,
+                limit: 1
+            }),
+            success: function(runData) {
+                if (!runData.success || !runData.runs || runData.runs.length === 0) {
+                    return;
+                }
+
+                const latestRun = runData.runs[0];
+                const status = latestRun.status;
+                const conclusion = latestRun.conclusion;
+
+                // 检查工作流是否完成
+                if (status === 'completed') {
+                    clearInterval(pollTimer);
+
+                    if (conclusion === 'success') {
+                        showAlert(`工作流 "${workflowName}" 已完成，正在下载产物...`, 'success');
+
+                        // 自动下载产物
+                        downloadArtifactsFromRun(latestRun.id, workflowName);
+                    } else {
+                        showAlert(`工作流 "${workflowName}" 已完成但失败: ${conclusion}`, 'danger');
+                    }
+                } else if (status === 'in_progress' || status === 'queued') {
+                    // 工作流仍在运行中
+                    if (pollCount % 6 === 0) { // 每30秒更新一次提示
+                        showAlert(`工作流 "${workflowName}" 正在运行中... (${pollCount * 5 / 60.toFixed(1)}分钟)`, 'info');
+                    }
+                }
+            },
+            error: function(xhr) {
+                clearInterval(pollTimer);
+                const msg = xhr.responseJSON?.error || '获取工作流状态失败';
+                showAlert(`${msg}，无法自动下载产物`, 'danger');
+            }
+        });
+    }, pollInterval);
+}
+
+// 从执行记录中下载所有产物
+function downloadArtifactsFromRun(runId, workflowName) {
+    // 获取产物列表
+    $.ajax({
+        url: '/workflows/api/artifacts',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            repo: currentRepo,
+            run_id: runId
+        }),
+        success: function(artifactData) {
+            if (!artifactData.success) {
+                showAlert(`获取产物列表失败: ${artifactData.error}`, 'danger');
+                return;
+            }
+
+            const artifacts = artifactData.artifacts;
+            if (!artifacts || artifacts.length === 0) {
+                showAlert(`工作流 "${workflowName}" 没有产物`, 'info');
+                return;
+            }
+
+            // 获取默认下载目录
+            let downloadDir = 'data/downloads'; // 默认值
+
+            // 先从配置获取下载目录
+            $.ajax({
+                url: '/config/api/all',
+                method: 'GET',
+                success: function(configData) {
+                    if (configData.download_dir) {
+                        downloadDir = configData.download_dir;
+                    }
+
+                    // 依次下载所有产物
+                    downloadAllArtifacts(artifacts, runId, downloadDir, 0);
+                },
+                error: function() {
+                    // 配置获取失败，使用默认目录
+                    downloadAllArtifacts(artifacts, runId, downloadDir, 0);
+                }
+            });
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '获取产物列表失败';
+            showAlert(msg, 'danger');
+        }
+    });
+}
+
+// 依次下载所有产物
+function downloadAllArtifacts(artifacts, runId, downloadDir, index) {
+    if (index >= artifacts.length) {
+        showAlert(`所有产物下载完成！共 ${artifacts.length} 个产物`, 'success');
+        return;
+    }
+
+    const artifact = artifacts[index];
+
+    if (artifact.expired) {
+        showAlert(`产物 "${artifact.name}" 已过期，跳过`, 'warning');
+        downloadAllArtifacts(artifacts, runId, downloadDir, index + 1);
+        return;
+    }
+
+    showAlert(`正在下载产物 (${index + 1}/${artifacts.length}): ${artifact.name}`, 'info');
+
+    // 下载产物
+    $.ajax({
+        url: '/workflows/api/artifacts/download',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            repo: currentRepo,
+            run_id: runId,
+            artifact_name: artifact.name,
+            download_dir: downloadDir
+        }),
+        timeout: 300000,
+        success: function(response) {
+            showAlert(`产物 "${artifact.name}" 下载成功！路径: ${response.extracted_path}`, 'success');
+
+            // 继续下载下一个
+            setTimeout(() => {
+                downloadAllArtifacts(artifacts, runId, downloadDir, index + 1);
+            }, 1000);
+        },
+        error: function(xhr) {
+            const errorMsg = xhr.responseJSON?.error || '下载失败';
+            showAlert(`产物 "${artifact.name}" 下载失败: ${errorMsg}`, 'danger');
+
+            // 继续下载下一个
+            setTimeout(() => {
+                downloadAllArtifacts(artifacts, runId, downloadDir, index + 1);
+            }, 1000);
+        }
+    });
+}
+
+function formatDate(dateString) {
+    const date = new Date(dateString);
+    return date.toLocaleString('zh-CN');
+}
+
+function showAlert(message, type) {
+    const alert = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    `;
+    $('#alert-container').html(alert);
+    setTimeout(() => {
+        $('.alert').alert('close');
+    }, 5000);
+}
+</script>
+{% endblock %}

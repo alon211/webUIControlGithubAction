@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block title %}编辑文件 - GitHub Actions Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2>文件编辑器</h2>
+            <a href="/files" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> 返回文件列表
+            </a>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                <!-- 文件信息 -->
+                <div class="mb-3">
+                    <label class="form-label">仓库</label>
+                    <input type="text" class="form-control" id="repo" value="{{ repo }}" readonly>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">文件路径</label>
+                    <input type="text" class="form-control" id="path" value="{{ path }}" readonly>
+                </div>
+
+                <!-- 文件内容编辑区 -->
+                <div class="mb-3">
+                    <label class="form-label">文件内容</label>
+                    <textarea class="form-control" id="file_content" rows="25"
+                              style="font-family: 'Consolas', 'Monaco', 'Courier New', monospace; font-size: 14px; line-height: 1.5;"
+                              placeholder="加载中..."></textarea>
+                    <div class="form-text">
+                        <span id="charCount">0</span> 字符
+                    </div>
+                </div>
+
+                <!-- 提交信息 -->
+                <div class="mb-3">
+                    <label class="form-label">提交信息</label>
+                    <input type="text" class="form-control" id="commit_message"
+                           placeholder="Update file via Web UI" value="Update file via Web UI">
+                </div>
+
+                <!-- 操作按钮 -->
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-success" onclick="saveFile()" id="saveBtn">
+                        <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                        <i class="bi bi-save"></i> 保存并推送
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="loadFile()">
+                        <i class="bi bi-arrow-clockwise"></i> 重新加载
+                    </button>
+                    <button type="button" class="btn btn-outline-danger" onclick="window.location.href='/files'">
+                        <i class="bi bi-x-circle"></i> 取消
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const repo = "{{ repo }}";
+const path = "{{ path }}";
+let branch = "{{ branch }}";  // 使用可变变量
+
+$(document).ready(function() {
+    // 页面加载时先获取默认分支，再获取文件内容
+    getDefaultBranch().then(() => {
+        loadFile();
+    });
+
+    // 监听内容变化，更新字符计数
+    $('#file_content').on('input', function() {
+        const content = $(this).val();
+        const lines = content.split('\n').length;
+        const chars = content.length;
+        $('#charCount').text(`${chars} 字符, ${lines} 行`);
+    });
+});
+
+function getDefaultBranch() {
+    return new Promise((resolve) => {
+        $.ajax({
+            url: '/files/api/default_branch',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ repo: repo }),
+            success: function(data) {
+                if (data.success) {
+                    branch = data.branch;
+                    console.log('使用默认分支:', branch);
+                }
+                resolve();
+            },
+            error: function() {
+                console.warn('获取默认分支失败，使用传入的分支:', branch);
+                resolve();
+            }
+        });
+    });
+}
+
+function loadFile() {
+    const textarea = $('#file_content');
+    textarea.val('加载中...').prop('disabled', true);
+
+    $.ajax({
+        url: '/files/api/get',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            repo: repo,
+            path: path,
+            branch: branch
+        }),
+        success: function(data) {
+            if (data.success) {
+                textarea.val(data.content).prop('disabled', false);
+                const lines = data.content.split('\n').length;
+                const chars = data.content.length;
+                $('#charCount').text(`${chars} 字符, ${lines} 行`);
+            } else {
+                showAlert(`加载文件失败: ${data.error}`, 'danger');
+                textarea.val('').prop('disabled', true);
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '加载文件失败';
+            showAlert(msg, 'danger');
+            textarea.val('').prop('disabled', true);
+        }
+    });
+}
+
+function saveFile() {
+    const content = $('#file_content').val();
+    const message = $('#commit_message').val().trim() || 'Update file via Web UI';
+
+    if (!content) {
+        showAlert('文件内容不能为空', 'warning');
+        return;
+    }
+
+    const btn = $('#saveBtn');
+    btn.prop('disabled', true);
+    btn.find('.spinner-border').removeClass('d-none');
+
+    $.ajax({
+        url: '/files/api/update',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            repo: repo,
+            path: path,
+            content: content,
+            message: message,
+            branch: branch
+        }),
+        success: function(data) {
+            if (data.success) {
+                showAlert('文件保存成功！即将返回文件列表...', 'success');
+                setTimeout(() => {
+                    window.location.href = '/files';
+                }, 2000);
+            } else {
+                showAlert(`保存失败: ${data.error}`, 'danger');
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '保存文件失败';
+            showAlert(msg, 'danger');
+        },
+        complete: function() {
+            btn.prop('disabled', false);
+            btn.find('.spinner-border').addClass('d-none');
+        }
+    });
+}
+
+function showAlert(message, type) {
+    const alert = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    `;
+    $('#alert-container').html(alert);
+    setTimeout(() => {
+        $('.alert').alert('close');
+    }, 5000);
+}
+
+// 支持 Tab 键缩进
+$('#file_content').on('keydown', function(e) {
+    if (e.which === 9) {
+        e.preventDefault();
+        const start = this.selectionStart;
+        const end = this.selectionEnd;
+        const value = $(this).val();
+
+        $(this).val(value.substring(0, start) + '    ' + value.substring(end));
+        this.selectionStart = this.selectionEnd = start + 4;
+    }
+});
+</script>
+{% endblock %}

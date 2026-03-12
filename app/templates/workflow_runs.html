@@ -1,0 +1,434 @@
+{% extends "base.html" %}
+
+{% block title %}工作流执行记录 - GitHub Actions Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+                <h2>工作流执行记录</h2>
+                <p class="text-muted mb-0">
+                    仓库: <strong>{{ repo }}</strong>
+                    {% if workflow_name %}
+                    | 工作流: <strong>{{ workflow_name }}</strong>
+                    {% endif %}
+                </p>
+            </div>
+            <a href="/workflows" class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> 返回工作流列表
+            </a>
+        </div>
+
+        <!-- 执行记录列表 -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">执行记录</h5>
+                <button class="btn btn-sm btn-outline-primary" onclick="loadRuns()">
+                    <i class="bi bi-arrow-clockwise"></i> 刷新
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="runsList">
+                    <p class="text-muted text-center py-5">加载中...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const repo = "{{ repo }}";
+const workflowId = {{ workflow_id or 'null' }};
+const workflowName = "{{ workflow_name }}";
+
+$(document).ready(function() {
+    loadRuns();
+});
+
+function loadRuns() {
+    const listDiv = $('#runsList');
+    listDiv.html('<p class="text-muted text-center py-5">加载中...</p>');
+
+    $.ajax({
+        url: '/workflows/api/runs',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            repo: repo,
+            workflow_id: workflowId,
+            limit: 20
+        }),
+        success: function(data) {
+            if (data.success) {
+                displayRuns(data.runs);
+            } else {
+                showAlert(`加载执行记录失败: ${data.error}`, 'danger');
+                listDiv.html(`<p class="text-danger text-center py-5">${data.error}</p>`);
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '加载执行记录失败';
+            showAlert(msg, 'danger');
+            listDiv.html(`<p class="text-danger text-center py-5">${msg}</p>`);
+        }
+    });
+}
+
+function displayRuns(runs) {
+    if (!runs || runs.length === 0) {
+        $('#runsList').html('<p class="text-muted text-center py-5">暂无执行记录</p>');
+        return;
+    }
+
+    let html = '<div class="table-responsive"><table class="table table-hover">';
+    html += `
+        <thead>
+            <tr>
+                <th>工作流</th>
+                <th>状态</th>
+                <th>触发者</th>
+                <th>事件</th>
+                <th>创建时间</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+    `;
+
+    runs.forEach(run => {
+        const statusBadge = getStatusBadge(run.status, run.conclusion);
+        const runUrl = run.html_url ? `<a href="${run.html_url}" target="_blank" class="btn btn-sm btn-link">在 GitHub 查看</a>` : '';
+
+        html += `
+            <tr>
+                <td>
+                    <strong>${run.display_title || run.name}</strong>
+                    <br><small class="text-muted">ID: ${run.id}</small>
+                </td>
+                <td>${statusBadge}</td>
+                <td>${run.actor || '-'}</td>
+                <td><span class="badge bg-info">${run.event}</span></td>
+                <td>${formatDate(run.created_at)}</td>
+                <td>
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn btn-outline-secondary" onclick="viewLogs(${run.id})">
+                            <i class="bi bi-file-text"></i> 日志
+                        </button>
+                        <button class="btn btn-outline-primary" onclick="viewArtifacts(${run.id})">
+                            <i class="bi bi-box-seam"></i> 产物
+                        </button>
+                    </div>
+                    ${runUrl ? `<br><small class="mt-1">${runUrl}</small>` : ''}
+                </td>
+            </tr>
+        `;
+    });
+
+    html += '</tbody></table></div>';
+    $('#runsList').html(html);
+}
+
+function getStatusBadge(status, conclusion) {
+    if (status === 'completed') {
+        if (conclusion === 'success') {
+            return '<span class="badge bg-success">成功</span>';
+        } else if (conclusion === 'failure') {
+            return '<span class="badge bg-danger">失败</span>';
+        } else if (conclusion === 'cancelled') {
+            return '<span class="badge bg-secondary">已取消</span>';
+        } else {
+            return `<span class="badge bg-warning">${conclusion || '未知'}</span>`;
+        }
+    } else if (status === 'in_progress') {
+        return '<span class="badge bg-primary">运行中</span>';
+    } else if (status === 'queued') {
+        return '<span class="badge bg-info">排队中</span>';
+    } else {
+        return `<span class="badge bg-secondary">${status}</span>`;
+    }
+}
+
+function viewLogs(runId) {
+    window.location.href = `/workflows/logs?repo=${encodeURIComponent(repo)}&run_id=${runId}`;
+}
+
+function viewArtifacts(runId) {
+    // 显示产物列表模态框
+    $.ajax({
+        url: '/workflows/api/artifacts',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            repo: repo,
+            run_id: runId
+        }),
+        success: function(data) {
+            if (data.success) {
+                displayArtifacts(data.artifacts, runId);
+            } else {
+                showAlert(`获取产物失败: ${data.error}`, 'danger');
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '获取产物失败';
+            showAlert(msg, 'danger');
+        }
+    });
+}
+
+function displayArtifacts(artifacts, runId) {
+    if (!artifacts || artifacts.length === 0) {
+        showAlert('此执行记录没有产物', 'info');
+        return;
+    }
+
+    // 保存当前 runId 供下载函数使用
+    const currentRunId = runId;
+
+    let html = `
+        <div class="modal fade" id="artifactsModal" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">工作流产物</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="list-group">
+    `;
+
+    artifacts.forEach(artifact => {
+        const size = formatSize(artifact.size);
+        html += `
+            <div class="list-group-item">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="mb-1">
+                            <i class="bi bi-box-seam"></i>
+                            ${artifact.name}
+                        </h6>
+                        <small class="text-muted">${size} | 创建于: ${formatDate(artifact.created_at)}</small>
+                    </div>
+                    <div>
+                        ${artifact.expired
+                            ? '<span class="badge bg-danger me-2">已过期</span>'
+                            : ''}
+                        ${!artifact.expired
+                            ? `<button class="btn btn-sm btn-primary"
+                                 onclick="downloadArtifact(${currentRunId}, '${artifact.name}', ${artifact.size})">
+                                 <i class="bi bi-download"></i> 下载
+                               </button>`
+                            : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+
+    html += `
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 下载目录选择模态框 -->
+        <div class="modal fade" id="downloadDirModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">选择下载目录</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label for="downloadDirInput" class="form-label">
+                                <i class="bi bi-folder2-open"></i> 选择保存位置
+                            </label>
+                            <input type="file"
+                                   webkitdirectory
+                                   directory
+                                   class="form-control"
+                                   id="downloadDirInput">
+                            <div class="form-text">
+                                <i class="bi bi-download"></i>
+                                产物文件将保存到您选择的这个文件夹中
+                            </div>
+                        </div>
+                        <div class="alert alert-warning">
+                            <small>
+                                <strong><i class="bi bi-exclamation-triangle"></i> 重要提示：</strong><br>
+                                浏览器可能会显示"选择文件上传"或"Upload"字样，但这实际上是选择<strong>保存位置</strong>。<br>
+                                请在弹出的对话框中：<br>
+                                1. 导航到您想保存产物的文件夹<br>
+                                2. 点击该文件夹内的<strong>任意一个文件</strong><br>
+                                3. 系统会自动使用该文件夹作为保存位置
+                            </small>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary" id="confirmDownloadBtn" disabled>
+                            开始下载
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 下载进度模态框 -->
+        <div class="modal fade" id="downloadProgressModal" tabindex="-1" data-bs-backdrop="static">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">下载中...</h5>
+                    </div>
+                    <div class="modal-body text-center py-4">
+                        <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="visually-hidden">加载中...</span>
+                        </div>
+                        <p class="mb-0" id="downloadStatusText">正在下载产物，请稍候...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // 移除旧的模态框
+    $('#artifactsModal').remove();
+    $('#downloadDirModal').remove();
+    $('#downloadProgressModal').remove();
+
+    // 添加新的模态框
+    $('body').append(html);
+    // 显示模态框
+    new bootstrap.Modal(document.getElementById('artifactsModal')).show();
+}
+
+function formatSize(bytes) {
+    if (!bytes) return '0 B';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+}
+
+function formatDate(dateString) {
+    const date = new Date(dateString);
+    return date.toLocaleString('zh-CN');
+}
+
+// ==================== 下载相关函数 ====================
+
+let currentDownload = {
+    runId: null,
+    artifactName: null,
+    artifactSize: null,
+    downloadDir: null
+};
+
+// 显示下载目录选择器
+function downloadArtifact(runId, artifactName, artifactSize) {
+    currentDownload = {
+        runId: runId,
+        artifactName: artifactName,
+        artifactSize: artifactSize,
+        downloadDir: null
+    };
+
+    const modal = new bootstrap.Modal(document.getElementById('downloadDirModal'));
+    modal.show();
+
+    $('#downloadDirInput').val('');
+    $('#confirmDownloadBtn').prop('disabled', true);
+}
+
+// 监听文件夹选择
+$(document).ready(function() {
+    $('#downloadDirInput').on('change', function() {
+        const files = this.files;
+        if (files && files.length > 0) {
+            const filePath = files[0].webkitRelativePath;
+            const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+
+            currentDownload.downloadDir = dirPath;
+            $('#confirmDownloadBtn').prop('disabled', false);
+        }
+    });
+
+    // 确认下载
+    $('#confirmDownloadBtn').on('click', function() {
+        if (!currentDownload.downloadDir) {
+            showAlert('请先选择下载目录', 'warning');
+            return;
+        }
+
+        bootstrap.Modal.getInstance(document.getElementById('downloadDirModal')).hide();
+
+        const progressModal = new bootstrap.Modal(document.getElementById('downloadProgressModal'));
+        progressModal.show();
+
+        performDownload();
+    });
+});
+
+// 执行下载
+function performDownload() {
+    $.ajax({
+        url: '/workflows/api/artifacts/download',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            repo: repo,
+            run_id: currentDownload.runId,
+            artifact_name: currentDownload.artifactName,
+            download_dir: currentDownload.downloadDir
+        }),
+        timeout: 300000,
+        success: function(response) {
+            $('#downloadStatusText').html(
+                `<i class="bi bi-check-circle text-success"></i> ${response.message}`
+            );
+
+            if (response.extracted_path) {
+                $('#downloadStatusText').append(
+                    `<br><small class="text-muted">路径: ${response.extracted_path}</small>`
+                );
+            }
+
+            setTimeout(() => {
+                bootstrap.Modal.getInstance(document.getElementById('downloadProgressModal')).hide();
+                showAlert(`产物 "${currentDownload.artifactName}" 下载成功！`, 'success');
+            }, 2000);
+        },
+        error: function(xhr) {
+            const errorMsg = xhr.responseJSON?.error || '下载失败';
+            $('#downloadStatusText').html(
+                `<i class="bi bi-x-circle text-danger"></i> ${errorMsg}`
+            );
+
+            setTimeout(() => {
+                bootstrap.Modal.getInstance(document.getElementById('downloadProgressModal')).hide();
+                showAlert(`下载失败: ${errorMsg}`, 'danger');
+            }, 3000);
+        }
+    });
+}
+
+function showAlert(message, type) {
+    const alert = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    `;
+    $('#alert-container').html(alert);
+    setTimeout(() => {
+        $('.alert').alert('close');
+    }, 5000);
+}
+</script>
+{% endblock %}

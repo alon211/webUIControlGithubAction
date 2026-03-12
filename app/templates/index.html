@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+
+{% block title %}首页 - GitHub Actions Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8 offset-md-2">
+        <div class="jumbotron bg-light p-5 rounded">
+            <h1 class="display-4">欢迎使用 GitHub Actions Manager</h1>
+            <p class="lead">管理 GitHub 仓库文件和工作流的 Web UI 工具</p>
+            <hr class="my-4">
+            <p>开始使用前，请先配置 GitHub Token 和仓库信息。</p>
+            <a class="btn btn-primary btn-lg" href="{{ url_for('config.index') }}" role="button">
+                配置系统
+            </a>
+        </div>
+
+        <!-- 快速触发面板 -->
+        <div class="card mt-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">⚡ 快速触发</h5>
+                <a href="{{ url_for('config.index') }}" class="btn btn-sm btn-outline-primary">
+                    <i class="bi bi-gear"></i> 管理快速触发
+                </a>
+            </div>
+            <div class="card-body">
+                <div id="quickTriggersPanel">
+                    <p class="text-muted text-center py-3">加载中...</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">📁 文件管理</h5>
+                        <p class="card-text">浏览、编辑和推送 GitHub 仓库文件</p>
+                        <a href="{{ url_for('files.index') }}" class="btn btn-primary">开始使用</a>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">⚙️ 工作流管理</h5>
+                        <p class="card-text">触发和监控 GitHub Actions 工作流</p>
+                        <a href="{{ url_for('workflows.index') }}" class="btn btn-primary">开始使用</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    loadQuickTriggers();
+});
+
+function loadQuickTriggers() {
+    $.ajax({
+        url: '/workflows/api/quick-triggers/list',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({}),
+        success: function(data) {
+            if (data.success) {
+                displayQuickTriggers(data.triggers);
+            } else {
+                $('#quickTriggersPanel').html('<p class="text-danger text-center py-3">加载失败</p>');
+            }
+        },
+        error: function() {
+            $('#quickTriggersPanel').html('<p class="text-danger text-center py-3">加载失败，请稍后重试</p>');
+        }
+    });
+}
+
+let statusCheckInterval = null;
+let previousStatus = {}; // 记录之前的状态（全局变量，避免每次监控时重置）
+
+function displayQuickTriggers(triggers) {
+    if (!triggers || triggers.length === 0) {
+        $('#quickTriggersPanel').html(`
+            <p class="text-muted text-center py-3">
+                暂无快速触发项。
+                <a href="{{ url_for('config.index') }}">前往配置页面添加</a>
+            </p>
+        `);
+        return;
+    }
+
+    let html = '<div class="row">';
+    triggers.forEach(trigger => {
+        const statusBadge = getStatusBadge(trigger.last_status);
+        const isRunning = (trigger.last_status === 'running' || trigger.last_status === 'in_progress' || trigger.last_status === 'queued');
+        const buttonDisabled = isRunning ? 'disabled' : '';
+        const buttonClass = isRunning ? 'btn-secondary' : 'btn-success';
+        const buttonText = isRunning ? '<span class="spinner-border spinner-border-sm me-1"></span>运行中' : '<i class="bi bi-play-fill"></i> 运行';
+
+        html += `
+            <div class="col-md-6 mb-3">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <h6 class="card-title">${trigger.name}</h6>
+                        <p class="card-text">${statusBadge}</p>
+                        <button class="btn btn-sm ${buttonClass}" ${buttonDisabled} onclick="triggerQuickTrigger('${trigger.id}', '${trigger.name}', this)">
+                            ${buttonText}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    html += '</div>';
+    $('#quickTriggersPanel').html(html);
+
+    // 初始化状态记录（如果还没有）
+    triggers.forEach(trigger => {
+        if (previousStatus[trigger.id] === undefined) {
+            previousStatus[trigger.id] = trigger.last_status;
+        }
+    });
+
+    // 如果有正在运行的工作流，启动状态监控
+    const hasRunning = triggers.some(t => t.last_status === 'running' || t.last_status === 'in_progress' || t.last_status === 'queued');
+    if (hasRunning) {
+        startStatusMonitoring();
+    }
+}
+
+function getStatusBadge(status) {
+    if (!status) {
+        return '<span class="badge bg-secondary">未运行</span>';
+    }
+    if (status === 'success') {
+        return '<span class="badge bg-success">✓ 上次成功</span>';
+    } else if (status === 'failure') {
+        return '<span class="badge bg-danger">✗ 上次失败</span>';
+    } else if (status === 'running' || status === 'in_progress' || status === 'queued') {
+        return '<span class="badge bg-primary">⟳ 进行中</span>';
+    } else {
+        return `<span class="badge bg-secondary">${status}</span>`;
+    }
+}
+
+function triggerQuickTrigger(id, name, buttonElement) {
+    if (!confirm(`确定要运行快速触发 "${name}" 吗？`)) {
+        return;
+    }
+
+    // 立即禁用按钮
+    if (buttonElement) {
+        $(buttonElement).prop('disabled', true).removeClass('btn-success').addClass('btn-secondary');
+        $(buttonElement).html('<span class="spinner-border spinner-border-sm me-1"></span>运行中');
+    }
+
+    $.ajax({
+        url: '/workflows/api/quick-triggers/trigger',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ id: id }),
+        success: function(data) {
+            if (data.success) {
+                showAlert(`快速触发 "${name}" 已在 ${data.branch || 'main'} 分支触发！`, 'success');
+                // 立即刷新列表并启动监控
+                loadQuickTriggers();
+            } else {
+                showAlert(`触发失败: ${data.error}`, 'danger');
+                // 失败后恢复按钮
+                if (buttonElement) {
+                    $(buttonElement).prop('disabled', false).removeClass('btn-secondary').addClass('btn-success');
+                    $(buttonElement).html('<i class="bi bi-play-fill"></i> 运行');
+                }
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '触发失败';
+            showAlert(msg, 'danger');
+            // 失败后恢复按钮
+            if (buttonElement) {
+                $(buttonElement).prop('disabled', false).removeClass('btn-secondary').addClass('btn-success');
+                $(buttonElement).html('<i class="bi bi-play-fill"></i> 运行');
+            }
+        }
+    });
+}
+
+function startStatusMonitoring() {
+    // 清除已有的监控
+    if (statusCheckInterval) {
+        clearInterval(statusCheckInterval);
+    }
+
+    // 每 5 秒检查一次状态
+    statusCheckInterval = setInterval(() => {
+        $.ajax({
+            url: '/workflows/api/quick-triggers/list',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({}),
+            success: function(data) {
+                if (data.success) {
+                    const hasRunning = data.triggers.some(t =>
+                        t.last_status === 'running' ||
+                        t.last_status === 'in_progress' ||
+                        t.last_status === 'queued'
+                    );
+
+                    // 检查是否有工作流刚完成（从运行变为成功）
+                    data.triggers.forEach(trigger => {
+                        const prevStatus = previousStatus[trigger.id];
+                        const currStatus = trigger.last_status;
+
+                        // 如果之前是运行中，现在成功了，自动下载产物
+                        if ((prevStatus === 'running' || prevStatus === 'in_progress' || prevStatus === 'queued') &&
+                            currStatus === 'success') {
+                            // 自动下载产物
+                            downloadArtifactsForQuickTrigger(trigger);
+                        }
+
+                        // 更新状态记录
+                        previousStatus[trigger.id] = currStatus;
+                    });
+
+                    // 更新显示
+                    displayQuickTriggers(data.triggers);
+
+                    // 如果没有正在运行的工作流，停止监控
+                    if (!hasRunning) {
+                        stopStatusMonitoring();
+                    }
+                }
+            },
+            error: function() {
+                // 监控失败，停止监控
+                stopStatusMonitoring();
+            }
+        });
+    }, 5000);
+}
+
+// 为快速触发自动下载产物
+function downloadArtifactsForQuickTrigger(trigger) {
+    // 获取最新的执行记录
+    $.ajax({
+        url: '/workflows/api/runs',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            repo: trigger.repo,
+            workflow_id: parseInt(trigger.workflow_id),
+            limit: 1
+        }),
+        success: function(runData) {
+            if (runData.success && runData.runs && runData.runs.length > 0) {
+                const latestRun = runData.runs[0];
+
+                // 获取产物列表
+                $.ajax({
+                    url: '/workflows/api/artifacts',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({
+                        repo: trigger.repo,
+                        run_id: latestRun.id
+                    }),
+                    success: function(artifactData) {
+                        if (artifactData.success && artifactData.artifacts && artifactData.artifacts.length > 0) {
+                            // 获取默认下载目录
+                            $.ajax({
+                                url: '/config/api',
+                                method: 'GET',
+                                success: function(configData) {
+                                    const downloadDir = configData.download_dir || 'data/downloads';
+
+                                    // 下载所有产物
+                                    downloadAllArtifactsForQuickTrigger(
+                                        artifactData.artifacts,
+                                        trigger.repo,
+                                        latestRun.id,
+                                        downloadDir,
+                                        0,
+                                        trigger.name
+                                    );
+                                },
+                                error: function() {
+                                    // 使用默认目录
+                                    const downloadDir = 'data/downloads';
+                                    downloadAllArtifactsForQuickTrigger(
+                                        artifactData.artifacts,
+                                        trigger.repo,
+                                        latestRun.id,
+                                        downloadDir,
+                                        0,
+                                        trigger.name
+                                    );
+                                }
+                            });
+                        }
+                    },
+                    error: function() {
+                        console.log(`快速触发 ${trigger.name} 获取产物失败`);
+                    }
+                });
+            }
+        },
+        error: function() {
+            console.log(`快速触发 ${trigger.name} 获取执行记录失败`);
+        }
+    });
+}
+
+// 下载所有产物（快速触发专用）
+function downloadAllArtifactsForQuickTrigger(artifacts, repo, runId, downloadDir, index, triggerName) {
+    if (index >= artifacts.length) {
+        showAlert(`快速触发 "${triggerName}" 产物下载完成！共 ${artifacts.length} 个产物`, 'success');
+        return;
+    }
+
+    const artifact = artifacts[index];
+
+    if (artifact.expired) {
+        // 跳过已过期的产物，继续下一个
+        downloadAllArtifactsForQuickTrigger(artifacts, repo, runId, downloadDir, index + 1, triggerName);
+        return;
+    }
+
+    console.log(`下载产物 (${index + 1}/${artifacts.length}): ${artifact.name}`);
+
+    // 下载产物
+    $.ajax({
+        url: '/workflows/api/artifacts/download',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            repo: repo,
+            run_id: runId,
+            artifact_name: artifact.name,
+            download_dir: downloadDir
+        }),
+        timeout: 300000,
+        success: function(response) {
+            console.log(`产物 "${artifact.name}" 下载成功: ${response.extracted_path}`);
+
+            // 继续下载下一个
+            setTimeout(() => {
+                downloadAllArtifactsForQuickTrigger(artifacts, repo, runId, downloadDir, index + 1, triggerName);
+            }, 500);
+        },
+        error: function(xhr) {
+            const errorMsg = xhr.responseJSON?.error || '下载失败';
+            console.error(`产物 "${artifact.name}" 下载失败: ${errorMsg}`);
+
+            // 继续下载下一个
+            setTimeout(() => {
+                downloadAllArtifactsForQuickTrigger(artifacts, repo, runId, downloadDir, index + 1, triggerName);
+            }, 500);
+        }
+    });
+}
+
+function stopStatusMonitoring() {
+    if (statusCheckInterval) {
+        clearInterval(statusCheckInterval);
+        statusCheckInterval = null;
+    }
+}
+
+function showAlert(message, type) {
+    const alert = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    `;
+    $('#alert-container').html(alert);
+    setTimeout(() => {
+        $('.alert').alert('close');
+    }, 3000);
+}
+</script>
+{% endblock %}

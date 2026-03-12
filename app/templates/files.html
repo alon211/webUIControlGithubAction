@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+
+{% block title %}文件管理 - GitHub Actions Manager{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-10 offset-md-1">
+        <h2>GitHub 文件管理</h2>
+        <p class="text-muted">浏览和编辑 GitHub 仓库文件</p>
+
+        <!-- 仓库选择和文件列表 -->
+        <div class="card mb-3">
+            <div class="card-body">
+                <form id="fileForm">
+                    <div class="row align-items-end">
+                        <div class="col-md-8">
+                            <label for="repo_path" class="form-label">仓库路径</label>
+                            <input type="text" class="form-control" id="repo_path" name="repo_path"
+                                   placeholder="owner/repo" value="{{ default_repo or '' }}" required>
+                            <div class="form-text">例如：octocat/Hello-World</div>
+                        </div>
+                        <div class="col-md-4">
+                            <button type="button" class="btn btn-primary w-100" onclick="listFiles()" id="listBtn">
+                                <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                                列出文件
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 面包屑导航 -->
+        <div id="breadcrumb" class="mb-3"></div>
+
+        <!-- 文件列表 -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">文件列表</h5>
+                <span id="fileCount" class="badge bg-secondary"></span>
+            </div>
+            <div class="card-body">
+                <div id="fileList">
+                    <p class="text-muted text-center py-5">请先输入仓库路径并点击"列出文件"</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentPath = '';
+let currentRepo = '';
+
+$(document).ready(function() {
+    // 回车键触发列表
+    $('#repo_path').on('keypress', function(e) {
+        if (e.which === 13) {
+            e.preventDefault();
+            listFiles();
+        }
+    });
+});
+
+function listFiles(path = '') {
+    const repo = $('#repo_path').val().trim();
+
+    if (!repo) {
+        showAlert('请输入仓库路径', 'warning');
+        return;
+    }
+
+    currentRepo = repo;
+    currentPath = path;
+
+    const btn = $('#listBtn');
+    btn.prop('disabled', true);
+    btn.find('.spinner-border').removeClass('d-none');
+
+    $.ajax({
+        url: '/files/api/list',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ repo: repo, path: path }),
+        success: function(data) {
+            if (data.success) {
+                displayFiles(data.files, path);
+                updateBreadcrumb(path);
+            } else {
+                showAlert(`列出文件失败: ${data.error}`, 'danger');
+                $('#fileList').html(`<p class="text-danger text-center py-5">${data.error}</p>`);
+                $('#fileCount').text('');
+            }
+        },
+        error: function(xhr) {
+            const msg = xhr.responseJSON?.error || '列出文件失败';
+            showAlert(msg, 'danger');
+        },
+        complete: function() {
+            btn.prop('disabled', false);
+            btn.find('.spinner-border').addClass('d-none');
+        }
+    });
+}
+
+function displayFiles(files, path) {
+    if (!files || files.length === 0) {
+        $('#fileList').html('<p class="text-muted text-center py-5">此目录为空</p>');
+        $('#fileCount').text('0 项');
+        return;
+    }
+
+    // 排序：文件夹在前，文件在后
+    files.sort((a, b) => {
+        if (a.type === b.type) {
+            return a.name.localeCompare(b.name);
+        }
+        return a.type === 'dir' ? -1 : 1;
+    });
+
+    let html = '<div class="list-group">';
+
+    // 添加返回上级目录（如果不在根目录）
+    if (path) {
+        const parentPath = path.substring(0, path.lastIndexOf('/'));
+        html += `
+            <a href="#" class="list-group-item list-group-item-action" onclick="listFiles('${parentPath}'); return false;">
+                <i class="bi bi-arrow-up-circle"></i> .. (返回上级)
+            </a>
+        `;
+    }
+
+    // 显示文件和文件夹
+    files.forEach(file => {
+        if (file.type === 'dir') {
+            html += `
+                <a href="#" class="list-group-item list-group-item-action" onclick="listFiles('${file.path}'); return false;">
+                    <i class="bi bi-folder-fill text-warning"></i>
+                    <strong>${file.name}</strong>
+                </a>
+            `;
+        } else {
+            const size = file.size ? formatSize(file.size) : '';
+            html += `
+                <a href="#" class="list-group-item list-group-item-action" onclick="openFile('${file.path}'); return false;">
+                    <i class="bi bi-file-earmark text-primary"></i>
+                    ${file.name}
+                    <span class="text-muted ms-auto">${size}</span>
+                </a>
+            `;
+        }
+    });
+
+    html += '</div>';
+    $('#fileList').html(html);
+    $('#fileCount').text(`${files.length} 项`);
+}
+
+function updateBreadcrumb(path) {
+    if (!path) {
+        $('#breadcrumb').html('<nav aria-label="breadcrumb"><ol class="breadcrumb mb-0"><li class="breadcrumb-item active">根目录</li></ol></nav>');
+        return;
+    }
+
+    const parts = path.split('/');
+    let html = '<nav aria-label="breadcrumb"><ol class="breadcrumb mb-0">';
+    html += '<li class="breadcrumb-item"><a href="#" onclick="listFiles(\'\'); return false;">根目录</a></li>';
+
+    let buildPath = '';
+    parts.forEach((part, index) => {
+        buildPath += (index > 0 ? '/' : '') + part;
+        if (index === parts.length - 1) {
+            html += `<li class="breadcrumb-item active">${part}</li>`;
+        } else {
+            html += `<li class="breadcrumb-item"><a href="#" onclick="listFiles('${buildPath}'); return false;">${part}</a></li>`;
+        }
+    });
+
+    html += '</ol></nav>';
+    $('#breadcrumb').html(html);
+}
+
+function openFile(path) {
+    window.location.href = `/files/editor?repo=${encodeURIComponent(currentRepo)}&path=${encodeURIComponent(path)}`;
+}
+
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+}
+
+function showAlert(message, type) {
+    const alert = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+    `;
+    $('#alert-container').html(alert);
+    setTimeout(() => {
+        $('.alert').alert('close');
+    }, 3000);
+}
+</script>
+{% endblock %}

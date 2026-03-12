@@ -1,0 +1,46 @@
+/* 自定义样式 */
+body {
+    background-color: #f8f9fa;
+}
+
+.jumbotron {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.jumbotron h1 {
+    color: white;
+}
+
+.jumbotron a {
+    background-color: white;
+    color: #667eea;
+    border: none;
+}
+
+.jumbotron a:hover {
+    background-color: #f0f0f0;
+}
+
+.card {
+    box-shadow: 0 2px 4px rgba(0,0,0,.1);
+    margin-bottom: 1rem;
+}
+
+.navbar-brand {
+    font-weight: bold;
+}
+
+#alert-container {
+    position: fixed;
+    top: 70px;
+    right: 20px;
+    z-index: 1050;
+}
+
+.code {
+    font-family: 'Courier New', monospace;
+    background-color: #f5f5f5;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
