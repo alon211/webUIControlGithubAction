@@ -37,6 +37,18 @@ def api_update_all():
         if not data:
             return jsonify({'error': '无效的请求数据'}), 400
 
+        # 处理下载目录：自动创建目录（如果存在）
+        download_dir = data.get('download_dir', '').strip()
+        if download_dir:
+            from pathlib import Path
+            try:
+                dir_path = Path(download_dir)
+                dir_path.mkdir(parents=True, exist_ok=True)
+                logger.info(f"下载目录已创建/验证: {dir_path}")
+            except Exception as e:
+                logger.warning(f"无法创建下载目录 {dir_path}: {e}")
+                # 不阻止保存配置，只记录警告
+
         success = ConfigService.set_many(data)
         if success:
             return jsonify({'success': True, 'message': '配置保存成功'})

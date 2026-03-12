@@ -25,7 +25,9 @@
       "Bash(taskkill /F /IM python.exe)",
       "Bash(curl -s http://localhost:5000/config/api -w \"\\\\nHTTP Status: %{http_code}\\\\n\")",
       "Bash(curl -s \"https://api.github.com/repos/alon211/expense-reimbursement-email-automation\")",
-      "Bash(netstat -ano)"
+      "Bash(netstat -ano)",
+      "mcp__chrome-devtools__fill",
+      "Read(//d//**)"
     ],
     "additionalDirectories": [
       "c:\\dockerVolumn\\webUIControlGithubAction\\app\\services"

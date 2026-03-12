@@ -42,16 +42,36 @@
                         <label for="download_dir" class="form-label">
                             <i class="bi bi-download"></i> 默认下载目录（保存位置）
                         </label>
+                        <div class="mb-2">
+                            <select class="form-select" id="download_dir_preset" onchange="applyPresetDir()">
+                                <option value="">-- 选择预设路径 --</option>
+                                <option value="data/downloads">data/downloads (默认)</option>
+                                <option value="downloads">downloads (项目根目录)</option>
+                                <option value="tmp/downloads">tmp/downloads (临时目录)</option>
+                                <option value="D:/Downloads">D:/Downloads (D盘)</option>
+                                <option value="C:/Users/${USER}/Downloads">C:/Users/${USER}/Downloads (用户下载目录)</option>
+                                <option value="custom">自定义路径...</option>
+                            </select>
+                        </div>
                         <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-folder"></i></span>
                             <input type="text" class="form-control" id="download_dir" name="download_dir"
                                    placeholder="data/downloads" value="data/downloads">
-                            <button class="btn btn-outline-primary" type="button" onclick="selectDownloadDir()">
-                                <i class="bi bi-folder"></i> 选择文件夹
+                            <button class="btn btn-outline-primary" type="button" onclick="selectFolderAndSetPath()" title="浏览文件夹">
+                                <i class="bi bi-folder-open"></i> 浏览
+                            </button>
+                            <button class="btn btn-outline-secondary" type="button" onclick="clearDownloadDir()" title="清空">
+                                <i class="bi bi-x-lg"></i>
                             </button>
                         </div>
                         <div class="form-text">
                             <i class="bi bi-info-circle"></i>
-                            工作流产物的保存路径。点击「选择文件夹」后，在弹出的对话框中选择任意文件即可（系统会自动提取父目录）
+                            <strong>工作流产物的保存路径</strong><br>
+                            • 可以从上方下拉菜单选择常用路径<br>
+                            • 点击「浏览」按钮选择文件夹（将保存为 data/文件夹名）<br>
+                            • 或直接在输入框中输入自定义路径<br>
+                            • 路径可以是相对路径（如 data/downloads）或绝对路径（如 D:/Downloads）<br>
+                            • 系统会自动创建不存在的目录
                         </div>
                     </div>
 
@@ -207,35 +227,105 @@ function showTokenResult(message, type) {
     }, 5000);
 }
 
-function selectDownloadDir() {
-    // 显示提示信息
-    showAlert('请在弹出的对话框中选择目标文件夹内的任意一个文件（系统会自动获取该文件的父目录作为下载路径）', 'info');
+function applyPresetDir() {
+    const select = $('#download_dir_preset');
+    const presetValue = select.val();
 
-    // 延迟一小段时间让用户看到提示
-    setTimeout(() => {
-        const input = $('<input type="file" webkitdirectory directory style="display:none">');
-        $('body').append(input);
+    if (presetValue === 'custom') {
+        // 用户选择自定义，打开文件夹选择对话框
+        selectFolderAndSetPath();
+        // 重置下拉菜单为默认值
+        select.val('');
+        return;
+    }
 
-        input.on('change', function() {
-            if (this.files && this.files.length > 0) {
-                const filePath = this.files[0].webkitRelativePath;
-                const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
-                $('#download_dir').val(dirPath);
+    if (presetValue) {
+        // 应用预设路径
+        $('#download_dir').val(presetValue);
 
-                // 显示成功提示
-                const dirName = dirPath.split('/').pop() || dirPath;
-                showAlert(`已选择下载目录: ${dirName}`, 'success');
+        // 显示提示
+        const presetName = select.find('option:selected').text();
+        showAlert(`已选择预设路径: ${presetName.split('(')[0].trim()}`, 'success');
+    }
+}
+
+async function selectFolderAndSetPath() {
+    try {
+        // 使用现代的 File System Access API
+        if ('showDirectoryPicker' in window) {
+            // 智能选择起始目录：根据当前配置路径推断
+            const currentPath = $('#download_dir').val().toLowerCase();
+            let startIn = 'downloads'; // 默认值
+
+            if (currentPath.includes('document')) {
+                startIn = 'documents';
+            } else if (currentPath.includes('picture')) {
+                startIn = 'pictures';
+            } else if (currentPath.includes('music')) {
+                startIn = 'music';
+            } else if (currentPath.includes('video')) {
+                startIn = 'videos';
+            } else if (currentPath.includes('desktop')) {
+                startIn = 'desktop';
+            } else if (currentPath.includes('download')) {
+                startIn = 'downloads';
             }
-            input.remove();
-        });
 
-        // 用户取消选择时清理
-        input.on('cancel', function() {
-            input.remove();
-        });
+            const dirHandle = await window.showDirectoryPicker({
+                mode: 'read',
+                startIn: startIn
+            });
 
-        input.click();
-    }, 500);
+            // 获取文件夹名称
+            const folderName = dirHandle.name;
+
+            // 设置路径（使用 data/ 前缀）
+            const finalPath = `data/${folderName}`;
+            $('#download_dir').val(finalPath);
+
+            showAlert(`已选择文件夹: ${folderName}，路径设置为: ${finalPath}`, 'success');
+
+        } else {
+            // 降级方案：使用旧的 webkitdirectory 方法
+            showAlert('浏览器不支持文件夹选择API，使用传统方式', 'warning');
+
+            const input = $('<input type="file" webkitdirectory directory style="display:none">');
+            $('body').append(input);
+
+            input.on('change', function() {
+                if (this.files && this.files.length > 0) {
+                    const firstFilePath = this.files[0].webkitRelativePath;
+                    const folderPath = firstFilePath.substring(0, firstFilePath.indexOf('/'));
+                    const finalPath = `data/${folderPath}`;
+                    $('#download_dir').val(finalPath);
+                    showAlert(`已选择文件夹: ${folderPath}，路径设置为: ${finalPath}`, 'success');
+                }
+                input.remove();
+            });
+
+            input.on('cancel', function() {
+                input.remove();
+            });
+
+            input.click();
+        }
+    } catch (err) {
+        // 用户取消选择
+        if (err.name !== 'AbortError') {
+            showAlert(`选择文件夹失败: ${err.message}`, 'danger');
+        }
+    }
+}
+
+function selectCustomFolder() {
+    // 单独的函数：让用户可以点击按钮选择文件夹
+    selectFolderAndSetPath();
+}
+
+function clearDownloadDir() {
+    $('#download_dir').val('');
+    $('#download_dir_preset').val('');
+    showAlert('已清空下载目录路径', 'info');
 }
 
 function saveConfig() {
